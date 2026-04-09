@@ -1,0 +1,70 @@
+// Phoenix Supply Chain Firewall -- Jenkinsfile Example
+// Copy this into your project or use as a shared library reference
+
+pipeline {
+    agent any
+
+    environment {
+        PHOENIX_API_KEY = credentials('phoenix-api-key')  // Jenkins credential ID
+    }
+
+    stages {
+        stage('Phoenix Firewall Setup') {
+            steps {
+                sh '''
+                    # Download Phoenix Firewall
+                    ARCH=$(uname -m)
+                    case "$ARCH" in
+                        x86_64)  ARCH="amd64" ;;
+                        aarch64) ARCH="arm64" ;;
+                    esac
+                    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+                    curl -sfL "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-${OS}-${ARCH}" \
+                        -o /tmp/phoenix-firewall
+                    chmod +x /tmp/phoenix-firewall
+
+                    # Configure (installs PATH shims)
+                    eval $(/tmp/phoenix-firewall \
+                        --api-key "$PHOENIX_API_KEY" \
+                        --ci \
+                        --mode enforce \
+                        --fail-on block \
+                        --report-path phoenix-firewall-report.json)
+                    echo "Phoenix Firewall configured"
+                '''
+            }
+        }
+
+        stage('Install Dependencies') {
+            steps {
+                sh 'npm ci'  // Protected by Phoenix Firewall
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'npm run build'
+            }
+        }
+
+        stage('Test') {
+            steps {
+                sh 'npm test'
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''
+                if [ -f phoenix-firewall-report.json ]; then
+                    BLOCKED=$(jq '[.[] | select(.action == "block")] | length' phoenix-firewall-report.json 2>/dev/null || echo 0)
+                    WARNED=$(jq '[.[] | select(.action == "warn")] | length' phoenix-firewall-report.json 2>/dev/null || echo 0)
+                    TOTAL=$(jq '. | length' phoenix-firewall-report.json 2>/dev/null || echo 0)
+                    echo "Phoenix Firewall: ${TOTAL} evaluated, ${BLOCKED} blocked, ${WARNED} warned"
+                fi
+            '''
+            archiveArtifacts artifacts: 'phoenix-firewall-report.json', allowEmptyArchive: true
+        }
+    }
+}

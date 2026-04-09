@@ -1,0 +1,101 @@
+# Phoenix Supply Chain Firewall -- Azure DevOps Pipeline Template
+# Usage:
+#   resources:
+#     repositories:
+#       - repository: phoenix-firewall
+#         type: github
+#         name: Security-Phoenix-demo/phoenix-firewall
+#   steps:
+#     - template: integrations/azure-devops/phoenix-firewall.yml@phoenix-firewall
+#       parameters:
+#         apiKey: $(PHOENIX_API_KEY)
+
+parameters:
+  - name: apiKey
+    type: string
+  - name: apiUrl
+    type: string
+    default: 'https://api.cvedetails.io'
+  - name: mode
+    type: string
+    default: 'enforce'
+    values:
+      - enforce
+      - warn
+      - audit
+  - name: failOn
+    type: string
+    default: 'block'
+    values:
+      - block
+      - warn
+      - any
+  - name: strict
+    type: boolean
+    default: false
+  - name: minPackageAgeHours
+    type: number
+    default: 0
+  - name: reportPath
+    type: string
+    default: 'phoenix-firewall-report.json'
+  - name: binaryUrl
+    type: string
+    default: 'https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download'
+
+steps:
+  - bash: |
+      ARCH=$(uname -m)
+      case "$ARCH" in
+        x86_64)  ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+      esac
+      OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+      BINARY="phoenix-firewall-${OS}-${ARCH}"
+      echo "Downloading Phoenix Firewall (${BINARY})..."
+      curl -sfL "${{ parameters.binaryUrl }}/${BINARY}" -o /tmp/phoenix-firewall
+      chmod +x /tmp/phoenix-firewall
+    displayName: 'Download Phoenix Firewall'
+
+  - bash: |
+      EXTRA_FLAGS=""
+      if [ "${{ parameters.strict }}" = "True" ]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --strict"
+      fi
+      if [ "${{ parameters.minPackageAgeHours }}" != "0" ]; then
+        EXTRA_FLAGS="$EXTRA_FLAGS --min-package-age-hours ${{ parameters.minPackageAgeHours }}"
+      fi
+
+      eval $(/tmp/phoenix-firewall \
+        --api-key "${{ parameters.apiKey }}" \
+        --api-url "${{ parameters.apiUrl }}" \
+        --ci \
+        --mode "${{ parameters.mode }}" \
+        --fail-on "${{ parameters.failOn }}" \
+        --report-path "${{ parameters.reportPath }}" \
+        $EXTRA_FLAGS)
+
+      echo "Phoenix Firewall configured -- package managers are now protected"
+    displayName: 'Configure Phoenix Firewall'
+
+  - bash: |
+      if [ -f "${{ parameters.reportPath }}" ]; then
+        BLOCKED=$(jq '[.[] | select(.action == "block")] | length' "${{ parameters.reportPath }}" 2>/dev/null || echo 0)
+        WARNED=$(jq '[.[] | select(.action == "warn")] | length' "${{ parameters.reportPath }}" 2>/dev/null || echo 0)
+        TOTAL=$(jq '. | length' "${{ parameters.reportPath }}" 2>/dev/null || echo 0)
+        echo "##vso[task.logissue type=warning]Phoenix Firewall: ${TOTAL} evaluated, ${BLOCKED} blocked, ${WARNED} warned"
+        if [ "$BLOCKED" -gt 0 ]; then
+          echo "##vso[task.logissue type=error]${BLOCKED} malicious package(s) blocked!"
+          jq '[.[] | select(.action == "block")] | .[] | "\(.package) \(.version) - \(.reason)"' "${{ parameters.reportPath }}"
+        fi
+      fi
+    displayName: 'Phoenix Firewall Report'
+    condition: always()
+
+  - task: PublishBuildArtifacts@1
+    inputs:
+      PathtoPublish: '${{ parameters.reportPath }}'
+      ArtifactName: 'phoenix-firewall-report'
+    condition: always()
+    continueOnError: true
+    displayName: 'Publish Firewall Report'

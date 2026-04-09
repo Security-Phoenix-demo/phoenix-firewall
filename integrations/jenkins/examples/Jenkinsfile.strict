@@ -1,0 +1,59 @@
+// Strict Jenkins pipeline with Phoenix Firewall
+// Fail-closed: blocks build if API is unreachable
+// Quarantine: rejects packages published less than 72 hours ago
+pipeline {
+    agent any
+
+    environment {
+        PHOENIX_API_KEY = credentials('phoenix-api-key')
+    }
+
+    stages {
+        stage('Security') {
+            steps {
+                sh '''
+                    ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; esac
+                    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+                    curl -sfL "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-${OS}-${ARCH}" \
+                        -o /tmp/phoenix-firewall && chmod +x /tmp/phoenix-firewall
+                    eval $(/tmp/phoenix-firewall \
+                        --api-key "$PHOENIX_API_KEY" \
+                        --ci \
+                        --mode enforce \
+                        --fail-on block \
+                        --strict \
+                        --min-package-age-hours 72 \
+                        --report-path phoenix-firewall-report.json)
+                '''
+            }
+        }
+
+        stage('Install') {
+            steps {
+                sh 'npm ci'
+            }
+        }
+
+        stage('Build & Test') {
+            steps {
+                sh 'npm run build && npm test'
+            }
+        }
+    }
+
+    post {
+        always {
+            sh '''
+                if [ -f phoenix-firewall-report.json ]; then
+                    BLOCKED=$(jq '[.[] | select(.action == "block")] | length' phoenix-firewall-report.json 2>/dev/null || echo 0)
+                    TOTAL=$(jq '. | length' phoenix-firewall-report.json 2>/dev/null || echo 0)
+                    echo "Phoenix Firewall: ${TOTAL} evaluated, ${BLOCKED} blocked"
+                    if [ "$BLOCKED" -gt 0 ]; then
+                        jq '[.[] | select(.action == "block")] | .[] | "\(.package) \(.version) - \(.reason)"' phoenix-firewall-report.json
+                    fi
+                fi
+            '''
+            archiveArtifacts artifacts: 'phoenix-firewall-report.json', allowEmptyArchive: true
+        }
+    }
+}

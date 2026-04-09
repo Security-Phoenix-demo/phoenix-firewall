@@ -1,0 +1,26 @@
+# Basic Bitbucket pipeline with Phoenix Firewall
+image: node:22-alpine
+
+pipelines:
+  default:
+    - step:
+        name: 'Phoenix Firewall'
+        image: alpine:3.19
+        script:
+          - apk add --no-cache curl bash
+          - |
+            ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; esac
+            curl -sfL "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-linux-${ARCH}" \
+              -o /usr/local/bin/phoenix-firewall && chmod +x /usr/local/bin/phoenix-firewall
+          - eval $(phoenix-firewall --api-key $PHOENIX_API_KEY --ci)
+        artifacts:
+          - phoenix-firewall-report.json
+
+    - step:
+        name: 'Build'
+        caches:
+          - node
+        script:
+          - npm ci
+          - npm run build
+          - npm test

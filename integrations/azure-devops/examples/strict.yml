@@ -1,0 +1,29 @@
+# Strict Azure DevOps pipeline with Phoenix Firewall
+# Fail-closed + 72-hour quarantine
+trigger:
+  - main
+
+resources:
+  repositories:
+    - repository: phoenix-firewall
+      type: github
+      name: Security-Phoenix-demo/phoenix-firewall
+      endpoint: github-connection
+
+pool:
+  vmImage: 'ubuntu-latest'
+
+steps:
+  - template: integrations/azure-devops/phoenix-firewall.yml@phoenix-firewall
+    parameters:
+      apiKey: $(PHOENIX_API_KEY)
+      mode: enforce
+      failOn: block
+      strict: true
+      minPackageAgeHours: 72
+
+  - script: npm ci
+    displayName: 'Install Dependencies (Protected)'
+
+  - script: npm run build && npm test
+    displayName: 'Build & Test'

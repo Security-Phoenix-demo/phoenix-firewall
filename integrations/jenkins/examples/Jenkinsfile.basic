@@ -1,0 +1,34 @@
+// Basic Jenkins pipeline with Phoenix Firewall
+pipeline {
+    agent any
+
+    environment {
+        PHOENIX_API_KEY = credentials('phoenix-api-key')
+    }
+
+    stages {
+        stage('Security') {
+            steps {
+                sh '''
+                    ARCH=$(uname -m); case "$ARCH" in x86_64) ARCH="amd64" ;; aarch64) ARCH="arm64" ;; esac
+                    OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+                    curl -sfL "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-${OS}-${ARCH}" \
+                        -o /tmp/phoenix-firewall && chmod +x /tmp/phoenix-firewall
+                    eval $(/tmp/phoenix-firewall --api-key "$PHOENIX_API_KEY" --ci)
+                '''
+            }
+        }
+
+        stage('Build') {
+            steps {
+                sh 'npm ci && npm run build'
+            }
+        }
+    }
+
+    post {
+        always {
+            archiveArtifacts artifacts: 'phoenix-firewall-report.json', allowEmptyArchive: true
+        }
+    }
+}

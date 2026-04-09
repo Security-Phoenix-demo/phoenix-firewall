@@ -1,0 +1,83 @@
+# Phoenix Supply Chain Firewall -- Bitbucket Pipe Definition
+# Usage in bitbucket-pipelines.yml:
+#
+#   - step:
+#       name: Security
+#       script:
+#         - pipe: docker://phoenixsecurity/firewall-pipe:latest
+#           variables:
+#             PHOENIX_API_KEY: $PHOENIX_API_KEY
+#             MODE: 'enforce'
+#
+# Or inline (no pipe image needed):
+#
+#   - step:
+#       name: Security
+#       script:
+#         - curl -sfL https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-linux-amd64 -o /usr/local/bin/phoenix-firewall
+#         - chmod +x /usr/local/bin/phoenix-firewall
+#         - eval $(phoenix-firewall --api-key $PHOENIX_API_KEY --ci)
+
+name: Phoenix Supply Chain Firewall
+image: alpine:3.19
+
+variables:
+  PHOENIX_API_KEY:
+    type: string
+    description: 'Phoenix API key (required)'
+  PHOENIX_API_URL:
+    type: string
+    default: 'https://api.cvedetails.io'
+    description: 'Phoenix API endpoint'
+  MODE:
+    type: string
+    default: 'enforce'
+    description: 'Enforcement mode: enforce | warn | audit'
+  FAIL_ON:
+    type: string
+    default: 'block'
+    description: 'Fail on: block | warn | any'
+  STRICT:
+    type: string
+    default: 'false'
+    description: 'Fail-closed when API unreachable'
+  MIN_AGE_HOURS:
+    type: string
+    default: '0'
+    description: 'Quarantine: block packages newer than N hours'
+  REPORT_PATH:
+    type: string
+    default: 'phoenix-firewall-report.json'
+    description: 'JSON report output path'
+
+script:
+  - apk add --no-cache curl jq bash
+  - |
+    ARCH=$(uname -m)
+    case "$ARCH" in
+      x86_64)  ARCH="amd64" ;;
+      aarch64) ARCH="arm64" ;;
+    esac
+    curl -sfL "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download/phoenix-firewall-linux-${ARCH}" \
+      -o /usr/local/bin/phoenix-firewall
+    chmod +x /usr/local/bin/phoenix-firewall
+  - |
+    EXTRA=""
+    if [ "${STRICT}" = "true" ]; then EXTRA="$EXTRA --strict"; fi
+    if [ "${MIN_AGE_HOURS:-0}" != "0" ]; then EXTRA="$EXTRA --min-package-age-hours ${MIN_AGE_HOURS}"; fi
+    eval $(phoenix-firewall \
+      --api-key "${PHOENIX_API_KEY}" \
+      --api-url "${PHOENIX_API_URL}" \
+      --ci \
+      --mode "${MODE}" \
+      --fail-on "${FAIL_ON}" \
+      --report-path "${REPORT_PATH}" \
+      $EXTRA)
+  - echo "Phoenix Firewall configured -- package managers are now protected"
+  - |
+    if [ -f "${REPORT_PATH}" ]; then
+      BLOCKED=$(jq '[.[] | select(.action == "block")] | length' "${REPORT_PATH}" 2>/dev/null || echo 0)
+      WARNED=$(jq '[.[] | select(.action == "warn")] | length' "${REPORT_PATH}" 2>/dev/null || echo 0)
+      TOTAL=$(jq '. | length' "${REPORT_PATH}" 2>/dev/null || echo 0)
+      echo "Phoenix Firewall: ${TOTAL} evaluated, ${BLOCKED} blocked, ${WARNED} warned"
+    fi
