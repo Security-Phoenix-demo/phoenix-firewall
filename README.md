@@ -73,6 +73,19 @@ HTTPS_PROXY=https://localhost:8443 npm ci
     fail-on: block
 ```
 
+## CI/CD Integrations
+
+| Platform | Integration | One-Line Setup |
+|----------|------------|----------------|
+| **GitHub Actions** | [Action](integrations/github-action/) | `uses: Security-Phoenix-demo/firewall-action@v1` |
+| **GitLab CI** | [Template](integrations/gitlab-ci/) | `include: remote: '...phoenix-firewall.yml'` |
+| **Jenkins** | [Shared Library](integrations/jenkins/) | `phoenixFirewall(apiKey: env.PHOENIX_API_KEY)` |
+| **Azure DevOps** | [Pipeline Template](integrations/azure-devops/) | `template: phoenix-firewall.yml@phoenix-firewall` |
+| **Bitbucket** | [Pipe](integrations/bitbucket/) | Inline script |
+| **Any CI** | [Generic](integrations/generic/) | `curl \| bash` |
+
+Each integration includes README, examples, and copy-paste configurations.
+
 ## Features
 
 ### Intelligence-Driven Detection
