@@ -1,0 +1,56 @@
+# GoReleaser configuration for Phoenix Firewall
+# Docs: https://goreleaser.com
+version: 2
+
+project_name: phoenix-firewall
+
+builds:
+  - id: phoenix-firewall
+    main: .
+    binary: phoenix-firewall
+    env:
+      - CGO_ENABLED=0
+    ldflags:
+      - -s -w
+      - -X github.com/nicokoenig/phoenix-firewall/cmd.Version={{ .Version }}
+      - -X github.com/nicokoenig/phoenix-firewall/cmd.GitCommit={{ .ShortCommit }}
+      - -X github.com/nicokoenig/phoenix-firewall/cmd.BuildDate={{ .Date }}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    builds:
+      - phoenix-firewall
+    format: binary
+    name_template: "{{ .ProjectName }}-{{ .Os }}-{{ .Arch }}"
+
+checksum:
+  name_template: "checksums-sha256.txt"
+  algorithm: sha256
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: nicokoenig
+    name: phoenix-firewall
+  name_template: "Phoenix Firewall v{{ .Version }}"
+  draft: false
+  prerelease: auto

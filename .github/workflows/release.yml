@@ -1,0 +1,120 @@
+name: Build Phoenix Firewall
+
+on:
+  push:
+    paths:
+      - 'tools/phoenix-firewall/**'
+    tags:
+      - 'firewall-v*'
+  pull_request:
+    paths:
+      - 'tools/phoenix-firewall/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            name: linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            name: darwin-amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            name: darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            name: windows-amd64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install cross-compilation tools (Linux ARM64)
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            tools/phoenix-firewall/target
+          key: ${{ runner.os }}-cargo-${{ matrix.target }}-${{ hashFiles('tools/phoenix-firewall/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-${{ matrix.target }}-
+
+      - name: Build release binary
+        working-directory: tools/phoenix-firewall
+        run: cargo build --release --target ${{ matrix.target }}
+        env:
+          CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
+
+      - name: Rename binary
+        shell: bash
+        run: |
+          EXT=""
+          if [[ "${{ matrix.os }}" == "windows-latest" ]]; then EXT=".exe"; fi
+          cp tools/phoenix-firewall/target/${{ matrix.target }}/release/phoenix-firewall${EXT} \
+             phoenix-firewall-${{ matrix.name }}${EXT}
+
+      - name: Generate SHA256
+        shell: bash
+        run: |
+          if command -v sha256sum &> /dev/null; then
+            sha256sum phoenix-firewall-${{ matrix.name }}* > phoenix-firewall-${{ matrix.name }}.sha256
+          else
+            shasum -a 256 phoenix-firewall-${{ matrix.name }}* > phoenix-firewall-${{ matrix.name }}.sha256
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: phoenix-firewall-${{ matrix.name }}
+          path: |
+            phoenix-firewall-${{ matrix.name }}*
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/firewall-v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Create checksums file
+        run: |
+          cd artifacts
+          cat */phoenix-firewall-*.sha256 > ../SHA256SUMS.txt
+          cd ..
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            artifacts/*/phoenix-firewall-*
+            SHA256SUMS.txt
+          generate_release_notes: true
