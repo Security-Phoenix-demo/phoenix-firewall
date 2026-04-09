@@ -1,0 +1,16 @@
+# Strict mode — fail-closed + quarantine
+include:
+  - remote: 'https://raw.githubusercontent.com/Security-Phoenix-demo/phoenix-firewall/main/integrations/gitlab-ci/phoenix-firewall.yml'
+
+variables:
+  PHOENIX_MODE: enforce
+  PHOENIX_STRICT: "true"
+  PHOENIX_MIN_AGE_HOURS: "48"
+  PHOENIX_FAIL_ON: block
+
+stages:
+  - security
+  - build
+
+phoenix-firewall-check:
+  stage: security

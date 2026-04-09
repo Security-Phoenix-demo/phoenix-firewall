@@ -1,0 +1,89 @@
+# Phoenix Supply Chain Firewall — GitLab CI Template
+# Usage: include this template in your .gitlab-ci.yml
+#
+# include:
+#   - remote: 'https://raw.githubusercontent.com/Security-Phoenix-demo/phoenix-firewall/main/integrations/gitlab-ci/phoenix-firewall.yml'
+#
+# Variables (set in CI/CD settings):
+#   PHOENIX_API_KEY: Your Phoenix API key (required, masked)
+#   PHOENIX_MODE: enforce | warn | audit (default: enforce)
+#   PHOENIX_FAIL_ON: block | warn | any (default: block)
+#   PHOENIX_STRICT: true | false (default: false)
+#   PHOENIX_MIN_AGE_HOURS: quarantine threshold (default: 0)
+
+.phoenix-firewall-base:
+  image: alpine:3.19
+  variables:
+    PHOENIX_API_URL: "https://api.cvedetails.io"
+    PHOENIX_MODE: "enforce"
+    PHOENIX_FAIL_ON: "block"
+    PHOENIX_STRICT: "false"
+    PHOENIX_MIN_AGE_HOURS: "0"
+    PHOENIX_REPORT_PATH: "phoenix-firewall-report.json"
+    PHOENIX_BINARY_URL: "https://github.com/Security-Phoenix-demo/phoenix-firewall/releases/latest/download"
+  before_script:
+    - apk add --no-cache curl jq bash
+    # Download binary
+    - |
+      ARCH=$(uname -m)
+      case "$ARCH" in
+        x86_64) ARCH="amd64" ;;
+        aarch64) ARCH="arm64" ;;
+      esac
+      BINARY="phoenix-firewall-linux-${ARCH}"
+      echo "Downloading Phoenix Firewall (${BINARY})..."
+      curl -sfL "${PHOENIX_BINARY_URL}/${BINARY}" -o /usr/local/bin/phoenix-firewall
+      chmod +x /usr/local/bin/phoenix-firewall
+    # Configure CI mode
+    - |
+      EXTRA_FLAGS=""
+      if [ "$PHOENIX_STRICT" = "true" ]; then EXTRA_FLAGS="$EXTRA_FLAGS --strict"; fi
+      if [ "$PHOENIX_MIN_AGE_HOURS" != "0" ]; then EXTRA_FLAGS="$EXTRA_FLAGS --min-package-age-hours $PHOENIX_MIN_AGE_HOURS"; fi
+      eval $(phoenix-firewall \
+        --api-key "$PHOENIX_API_KEY" \
+        --api-url "$PHOENIX_API_URL" \
+        --ci \
+        --mode "$PHOENIX_MODE" \
+        --fail-on "$PHOENIX_FAIL_ON" \
+        --report-path "$PHOENIX_REPORT_PATH" \
+        $EXTRA_FLAGS)
+  artifacts:
+    paths:
+      - $PHOENIX_REPORT_PATH
+    when: always
+    expire_in: 30 days
+    reports:
+      # GitLab will parse this as a generic report
+      dotenv: phoenix-firewall-env.txt
+
+# Ready-to-use job — add to your pipeline
+phoenix-firewall-check:
+  extends: .phoenix-firewall-base
+  stage: test
+  script:
+    - echo "Phoenix Firewall configured — package managers are now protected"
+    - echo "Run your install commands in subsequent jobs or scripts"
+  after_script:
+    - |
+      if [ -f "$PHOENIX_REPORT_PATH" ]; then
+        BLOCKED=$(jq '[.[] | select(.action == "block")] | length' "$PHOENIX_REPORT_PATH" 2>/dev/null || echo 0)
+        WARNED=$(jq '[.[] | select(.action == "warn")] | length' "$PHOENIX_REPORT_PATH" 2>/dev/null || echo 0)
+        TOTAL=$(jq '. | length' "$PHOENIX_REPORT_PATH" 2>/dev/null || echo 0)
+        echo "PHOENIX_BLOCKED=$BLOCKED" >> phoenix-firewall-env.txt
+        echo "PHOENIX_WARNED=$WARNED" >> phoenix-firewall-env.txt
+        echo "PHOENIX_TOTAL=$TOTAL" >> phoenix-firewall-env.txt
+        echo "Phoenix Firewall: $TOTAL evaluated, $BLOCKED blocked, $WARNED warned"
+      fi
+  rules:
+    - changes:
+        - package-lock.json
+        - yarn.lock
+        - pnpm-lock.yaml
+        - requirements.txt
+        - Pipfile.lock
+        - poetry.lock
+        - Cargo.lock
+        - Gemfile.lock
+        - go.sum
+    - when: manual
+      allow_failure: true

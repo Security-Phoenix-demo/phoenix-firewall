@@ -1,0 +1,24 @@
+# Basic GitLab CI with Phoenix Firewall
+include:
+  - remote: 'https://raw.githubusercontent.com/Security-Phoenix-demo/phoenix-firewall/main/integrations/gitlab-ci/phoenix-firewall.yml'
+
+stages:
+  - security
+  - build
+  - test
+
+phoenix-firewall-check:
+  stage: security
+
+build:
+  stage: build
+  image: node:22-alpine
+  script:
+    - npm ci
+    - npm run build
+
+test:
+  stage: test
+  image: node:22-alpine
+  script:
+    - npm test
