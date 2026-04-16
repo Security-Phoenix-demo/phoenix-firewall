@@ -1,0 +1,151 @@
+name: 'Phoenix Supply Chain Firewall'
+description: 'Enforce Phoenix firewall rules on package installations in CI/CD'
+author: 'Phoenix Security'
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  api-key:
+    description: 'Phoenix API key'
+    required: true
+  mode:
+    description: 'Enforcement mode: enforce | warn | audit'
+    default: 'enforce'
+  fail-on:
+    description: 'Fail the build on: block | warn | any'
+    default: 'block'
+  strict:
+    description: 'Fail-closed when API unreachable'
+    default: 'false'
+  min-package-age-hours:
+    description: 'Quarantine: block packages newer than N hours'
+    default: '0'
+  report-path:
+    description: 'JSON report output path'
+    default: 'phoenix-firewall-report.json'
+  slack-channel:
+    description: 'Slack channel override for notifications'
+    default: ''
+  egress-policy:
+    description: 'Harden-Runner egress policy: block | audit | off'
+    default: 'off'
+  allowed-endpoints:
+    description: 'Allowed egress endpoints (newline-separated domain:port)'
+    default: ''
+  version:
+    description: 'Phoenix Firewall binary version'
+    default: 'latest'
+
+outputs:
+  blocked-count:
+    description: 'Number of blocked packages'
+  warned-count:
+    description: 'Number of warned packages'
+  audit-count:
+    description: 'Number of audited packages'
+  report-path:
+    description: 'Path to the JSON report file'
+  report-url:
+    description: 'URL to the Phoenix dashboard report'
+
+runs:
+  using: 'composite'
+  steps:
+    # Optional: Harden-Runner integration
+    - name: Harden Runner
+      if: inputs.egress-policy != 'off'
+      uses: step-security/harden-runner@v2
+      with:
+        egress-policy: ${{ inputs.egress-policy }}
+        allowed-endpoints: |
+          api.cvedetails.io:443
+          github.com:443
+          registry.npmjs.org:443
+          pypi.org:443
+          files.pythonhosted.org:443
+          ${{ inputs.allowed-endpoints }}
+
+    # Download binary
+    - name: Download Phoenix Firewall
+      shell: bash
+      run: |
+        VERSION="${{ inputs.version }}"
+        if [ "$VERSION" = "latest" ]; then
+          VERSION=$(curl -sf https://api.github.com/repos/phoenix-security/phoenix-firewall/releases/latest | grep tag_name | cut -d'"' -f4)
+        fi
+
+        OS=$(uname -s | tr '[:upper:]' '[:lower:]')
+        ARCH=$(uname -m)
+        case "$ARCH" in
+          x86_64) ARCH="amd64" ;;
+          aarch64|arm64) ARCH="arm64" ;;
+        esac
+
+        BINARY="phoenix-firewall-${OS}-${ARCH}"
+        URL="https://github.com/phoenix-security/phoenix-firewall/releases/download/${VERSION}/${BINARY}"
+
+        echo "Downloading Phoenix Firewall ${VERSION} (${OS}-${ARCH})..."
+        curl -sfL -o /tmp/phoenix-firewall "$URL"
+        chmod +x /tmp/phoenix-firewall
+
+        # Verify SHA256
+        SHA_URL="${URL}.sha256"
+        EXPECTED=$(curl -sf "$SHA_URL" | awk '{print $1}')
+        ACTUAL=$(sha256sum /tmp/phoenix-firewall | awk '{print $1}')
+
+        if [ "$EXPECTED" != "$ACTUAL" ] && [ -n "$EXPECTED" ]; then
+          echo "::error::SHA256 verification failed!"
+          echo "Expected: $EXPECTED"
+          echo "Actual: $ACTUAL"
+          exit 1
+        fi
+
+        sudo mv /tmp/phoenix-firewall /usr/local/bin/phoenix-firewall
+
+    # Install with CI mode
+    - name: Configure Phoenix Firewall
+      shell: bash
+      run: |
+        eval $(phoenix-firewall \
+          --api-key "${{ inputs.api-key }}" \
+          --ci \
+          --mode "${{ inputs.mode }}" \
+          --fail-on "${{ inputs.fail-on }}" \
+          --report-path "${{ inputs.report-path }}" \
+          ${{ inputs.strict == 'true' && '--strict' || '' }} \
+          ${{ inputs.min-package-age-hours != '0' && format('--min-package-age-hours {0}', inputs.min-package-age-hours) || '' }})
+
+    # Generate job summary on completion
+    - name: Generate Summary
+      if: always()
+      shell: bash
+      run: |
+        if [ -f "${{ inputs.report-path }}" ]; then
+          BLOCKED=$(jq '[.[] | select(.action == "block")] | length' "${{ inputs.report-path }}" 2>/dev/null || echo 0)
+          WARNED=$(jq '[.[] | select(.action == "warn")] | length' "${{ inputs.report-path }}" 2>/dev/null || echo 0)
+          AUDITED=$(jq '[.[] | select(.action == "audit")] | length' "${{ inputs.report-path }}" 2>/dev/null || echo 0)
+          TOTAL=$(jq '. | length' "${{ inputs.report-path }}" 2>/dev/null || echo 0)
+
+          echo "## :shield: Phoenix Firewall Report" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Metric | Count |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total evaluated | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| :no_entry: Blocked | $BLOCKED |" >> $GITHUB_STEP_SUMMARY
+          echo "| :warning: Warned | $WARNED |" >> $GITHUB_STEP_SUMMARY
+          echo "| :mag: Audited | $AUDITED |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$BLOCKED" -gt 0 ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Blocked Packages" >> $GITHUB_STEP_SUMMARY
+            echo '```json' >> $GITHUB_STEP_SUMMARY
+            jq '[.[] | select(.action == "block")]' "${{ inputs.report-path }}" >> $GITHUB_STEP_SUMMARY
+            echo '```' >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "blocked-count=$BLOCKED" >> $GITHUB_OUTPUT
+          echo "warned-count=$WARNED" >> $GITHUB_OUTPUT
+          echo "audit-count=$AUDITED" >> $GITHUB_OUTPUT
+          echo "report-path=${{ inputs.report-path }}" >> $GITHUB_OUTPUT
+        fi

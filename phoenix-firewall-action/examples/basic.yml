@@ -1,0 +1,21 @@
+name: Security Scan
+on: [push, pull_request]
+
+jobs:
+  firewall:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Phoenix Firewall Scan
+        uses: phoenix-security/firewall-action@v1
+        id: firewall
+        with:
+          api-key: ${{ secrets.PHOENIX_API_KEY }}
+
+      - name: Check results
+        if: always()
+        run: |
+          echo "Blocked packages: ${{ steps.firewall.outputs.blocked }}"
+          echo "Warned packages: ${{ steps.firewall.outputs.warned }}"
+          echo "Full report: ${{ steps.firewall.outputs.report-path }}"
